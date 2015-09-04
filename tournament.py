@@ -6,35 +6,67 @@
 import psycopg2
 
 
+
 def connect():
     """Connect to the PostgreSQL database.  Returns a database connection."""
     return psycopg2.connect("dbname=tournament")
 
+def execute_query(QUERY, op, arg1,arg2):
+    '''Execute queries provided based on op and arguments'''
+    # connect to the database
+    DB = connect()
+    # obtain a cursor 
+    cur = DB.cursor()
+
+    result = ''
+    # check the op code and execute appropriate query
+    if op == 'COUNT_PLAYERS':
+        cur.execute(QUERY)
+        result = cur.fetchone()[0]
+
+    elif op == 'INSERT_PLAYER':
+        cur.execute(QUERY,(arg1,))
+        cur.execute('SELECT LASTVAL()')
+        result = cur.fetchone()[0]
+
+    elif op == 'DELETE_ROWS':
+        cur.execute(QUERY)
+
+    elif op == 'QUERY_PLAYERS':
+        cur.execute(QUERY)
+        result = cur.fetchall()
+   
+    elif op == 'QUERY_WINS' or op == 'QUERY_LOSES':
+        cur.execute(QUERY,(arg1,))
+        result = cur.fetchone()[0]
+
+    elif op == 'INSERT_MATCH':
+        cur.execute(QUERY,(arg1,arg2))
+
+    DB.commit()
+    DB.close()
+
+    return result
 
 def deleteMatches():
     """Remove all the match records from the database."""
-    DB = connect()
-    cur = DB.cursor()
     # Execute the SQL command to delete all rows in matches table
-    cur.execute("DELETE FROM matches")
-    DB.commit()
+    QUERY='''DELETE FROM matches'''
+    execute_query(QUERY,'DELETE_ROWS','','')
 
 def deletePlayers():
     """Remove all the player records from the database."""
-    DB = connect()
-    cur = DB.cursor()
     # Execute the SQL command to delete all rows in players table
-    cur.execute("DELETE FROM players")
-    DB.commit()
+    QUERY='''DELETE FROM players'''
+    execute_query(QUERY,'DELETE_ROWS','','')
+
 
 def countPlayers():
     """Returns the number of players currently registered."""
-    DB = connect()
-    cur = DB.cursor()
     # Execute the SQL command to count all rows in players table
-    cur.execute("SELECT count(*) FROM players")
-    result = cur.fetchone()
-    return result[0]
+    QUERY= '''SELECT count(*) FROM players'''
+    result = execute_query(QUERY, 'COUNT_PLAYERS','','')
+    return result
 
 def registerPlayer(name):
     """Adds a player to the tournament database.
@@ -45,14 +77,10 @@ def registerPlayer(name):
     Args:
       name: the player's full name (need not be unique).
     """
-    DB = connect()
-    cur = DB.cursor()
     # Execute the SQL command to insert a row in players table
-    cur.execute("INSERT INTO players(name, wins, matches) VALUES(%s,%s,%s)", (name,0,0))
-    DB.commit()
-    # Capture the id of the new row that is inserted
-    result = cur.lastrowid
-    return result
+    QUERY = '''INSERT INTO players(name) VALUES(%s)'''
+    lastid = execute_query(QUERY, 'INSERT_PLAYER',name,'')
+    return lastid
 
 
 def playerStandings():
@@ -68,15 +96,30 @@ def playerStandings():
         wins: the number of matches the player has won
         matches: the number of matches the player has played
     """
-    DB = connect()
-    cur = DB.cursor()
-    # Execute SQL command to read all rows in players table sorted by wins column in descending order
-    cur.execute("SELECT player_id, name, wins, matches FROM players ORDER BY wins DESC")
-    result = cur.fetchall()
-    return result
 
+    standings = []
+    # Execute SQL command to read all rows in players table
+    QUERY = '''SELECT player_id, name FROM players'''
+    result = execute_query(QUERY,'QUERY_PLAYERS','','')
+ 
+    # For each player, find the wins, loses and total matches
+    # and make tuples
+    for player_id, name in result:
+        QUERY = "SELECT count(*) FROM matches WHERE winner = '%s'"
+        wins = execute_query(QUERY,'QUERY_WINS',player_id,'')
 
+        QUERY = "SELECT count(*) FROM matches WHERE loser = '%s'"
+        loses = execute_query(QUERY,'QUERY_LOSES',player_id,'')
 
+        matches = wins + loses
+        standings.append((player_id, name, wins, matches))
+
+    # Sort the tuples in standings array by wins in descending order
+    standings.sort(key=lambda x: x[2], reverse=True)
+
+    return standings
+ 
+ 
 def reportMatch(winner, loser):
     """Records the outcome of a single match between two players.
 
@@ -84,31 +127,10 @@ def reportMatch(winner, loser):
       winner:  the id number of the player who won
       loser:  the id number of the player who lost
     """
-    DB = connect()
-    cur = DB.cursor()
+
     # Execute SQL Command to insert a new row in matches table to record the match results
-    cur.execute("INSERT INTO matches(player1, player2, winner) VALUES(%s,%s,%s)", (winner,loser,winner))
-    # Execute SQL command to find out the wins so far for the winner player and save
-    # it in the variable old_total_wins
-    cur.execute("SELECT wins FROM players WHERE player_id = %s" % winner)
-    old_total_wins = cur.fetchone()[0]
-    # Execute SQL command to find out the matches played so far for the winner player
-    # and save it in the variable old_total_matches
-    cur.execute("SELECT matches FROM players WHERE player_id = %s" % winner)
-    old_total_matches = cur.fetchone()[0]
-    # Execute SQL command to update the player stats to reflect the match played
-    # by incrementing the wins and the matches
-    cur.execute("UPDATE players SET wins = %s, matches = %s WHERE player_id = %s", ((old_total_wins+1),(old_total_matches+1),winner))
-    # Execute SQL command to find out the number of matches played so far by the loser player (save it to old_total_matches)
-    cur.execute("SELECT matches FROM players WHERE player_id = %s" % loser)
-    old_total_matches = cur.fetchone()[0]
-    # Execute SQL command to update the loser player stats to refect the match played
-    # by incrementing the matches
-    cur.execute("UPDATE players SET matches = %s WHERE player_id = %s", ((old_total_matches+1),loser))
-    DB.commit()
-
-
-
+    QUERY = '''INSERT INTO matches(winner, loser) VALUES(%s,%s)'''
+    execute_query(QUERY,'INSERT_MATCH',winner,loser)
 
 
 def swissPairings():
@@ -126,28 +148,28 @@ def swissPairings():
         id2: the second player's unique id
         name2: the second player's name
     """
-    DB = connect()
-    cur = DB.cursor()
-    # Array to save the pairings for the next round
-    list_pairings = []
+    # Save the player's standings
+    standings = playerStandings()
+
     # Array to save players who are paired for the next round
-    players_already_paired = []
+    pairings = []
 
-    #cur.execute("SELECT * from players")
-    # Execute SQL Commmand to obtain a table of all combinations of players
-    # This table contains first player's id, first player's name, second players's id, second player's name
-    # and a score which is combined wins. The table will be sorted by the combined wins in descending order
-    cur.execute("SELECT a.player_id, a.name, b.player_id, b.name, (a.wins+b.wins) as combined_wins \
-                 FROM players as a, players as b WHERE a.player_id != b.player_id ORDER BY combined_wins DESC")
-    result = cur.fetchall()
+    # Obtain total number of players
+    num_players = countPlayers()
 
-    # Pick the players (add them to list_pairings) for the next round from the table
-    # as long as they are not already paired
-    for id1, name1, id2, name2, combined_wins in result:
-        #print id1, name1, id2, name2, combined_wins
-        if (id1 not in players_already_paired) and (id2 not in players_already_paired):
-            list_pairings.append([id1, name1, id2, name2])
-            players_already_paired.append(id1)
-            players_already_paired.append(id2)
-    #print list_pairings
-    return list_pairings
+    # initialize count to keep track of pairings
+    count = 0
+
+    # Obtain all ids from the standings list
+    id = [row[0] for row in standings]
+
+    # Obtain all names from standings list
+    name = [row[1] for row in standings]
+
+    # iterate and match the players. Since Standings list is already sorted based on wins,
+    # the matchings is done by going down that list
+    while count < num_players:
+       pairings.append((id[count], name[count], id[count+1], name[count+1]))
+       count = count+2
+    
+    return pairings

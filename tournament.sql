@@ -17,14 +17,11 @@ CREATE DATABASE tournament;
 -- Table has 4 columns:
 -- player_id: Auto increment integer which is a primary key
 -- name: Full name of the player
--- wins: Total Number of wins in a  tournament
--- matches: Total Number of matches played in a tournament
+
 
 CREATE TABLE players (
     player_id serial PRIMARY KEY,
-    name text not null,
-    wins integer,
-    matches integer);
+    name text not null);
 
 -- Describe players table 
 \d players
@@ -33,14 +30,12 @@ CREATE TABLE players (
 -- Each row provides details abou a matched that is played in a tournament
 -- with 4 columns:
 -- match_id: Auto increment integer which is the primary key
--- player1: One of two players in a match (Foreign key in players table)
--- player2: The other player in a match (Foreign key in players table)
--- winner: Winner of the player (Foreign key in players table)
+-- winner: One of two players in a match (Foreign key in players table)
+-- loser: The other player in a match (Foreign key in players table)
 CREATE TABLE matches (
     match_id serial PRIMARY KEY,
-    player1 integer references players(player_id),
-    player2 integer references players(player_id),
-    winner integer references players(player_id) );
+    winner integer references players(player_id),
+    loser integer references players(player_id));
 
 -- Describe matches table
 \d matches
